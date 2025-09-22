@@ -44,13 +44,24 @@ const resolveRoles = async(ids=[])=>{
   const byId=Object.fromEntries(all.map(x=>[x.id,x]));
   return ids.map(id=>({id,name:byId[id]?.name||id}));
 };
-const bloxlinkRobloxToDiscord = async(robloxId)=>{
-  const r=await fetch(`https://api.blox.link/v4/public/roblox-to-discord/${robloxId}`,{
-    headers:{Authorization:BLOXLINK_KEY}
+// sesudah: coba guild endpoint dulu, fallback ke global
+const bloxlinkRobloxToDiscord = async (robloxId)=>{
+  // 1) guild-scoped (butuh Bloxlink Bot di guild kamu + key yang valid)
+  const r1 = await fetch(`https://api.blox.link/v4/public/guilds/${process.env.GUILD_ID}/roblox-to-discord/${robloxId}`, {
+    headers: { Authorization: process.env.BLOXLINK_KEY }
   });
-  if(!r.ok) return null;
-  const j=await r.json();
-  return j?.primaryAccount?.discordId||null;
+  if (r1.ok) {
+    const j = await r1.json();
+    if (j?.primaryAccount?.discordId) return j.primaryAccount.discordId;
+  }
+
+  // 2) fallback global kalau plan-mu support
+  const r2 = await fetch(`https://api.blox.link/v4/public/roblox-to-discord/${robloxId}`, {
+    headers: { Authorization: process.env.BLOXLINK_KEY }
+  });
+  if (!r2.ok) return null;
+  const g = await r2.json();
+  return g?.primaryAccount?.discordId || null;
 };
 
 module.exports = async (req, res) => {
