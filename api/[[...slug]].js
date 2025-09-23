@@ -1,4 +1,4 @@
-// single file, no Express — Vercel catch-all
+// api/[[...slug]].js — single file, no Express
 const {
   GUILD_ID, DISCORD_BOT_TOKEN, DISCORD_LOG_WEBHOOK_URL,
   BLOXLINK_KEY, SHARED_SECRET,
@@ -35,7 +35,7 @@ const getGuildMember = async(id)=>{
 };
 const getGuildRoles = async()=>{
   const r=await fetch(`https://discord.com/api/v10/guilds/${GUILD_ID}/roles`,{
-    headers:{Authorization:`Bot ${DISCORD_BOT_TOKEN}`}
+    headers:{Authorization:`Bot ${DISCORD_BOT_TOKEN}` }
   });
   return r.ok? r.json(): [];
 };
@@ -44,31 +44,35 @@ const resolveRoles = async(ids=[])=>{
   const byId=Object.fromEntries(all.map(x=>[x.id,x]));
   return ids.map(id=>({id,name:byId[id]?.name||id}));
 };
-// sesudah: coba guild endpoint dulu, fallback ke global
-const bloxlinkRobloxToDiscord = async (robloxId)=>{
-  // 1) guild-scoped (butuh Bloxlink Bot di guild kamu + key yang valid)
-  const r1 = await fetch(`https://api.blox.link/v4/public/guilds/${process.env.GUILD_ID}/roblox-to-discord/${robloxId}`, {
-    headers: { Authorization: process.env.BLOXLINK_KEY }
+
+// Bloxlink: guild-scoped → global, handle {primaryAccount.discordId} dan {discordIDs:[...]}
+async function bloxlinkRobloxToDiscord(robloxId){
+  // 1) Guild-scoped
+  const r1 = await fetch(`https://api.blox.link/v4/public/guilds/${GUILD_ID}/roblox-to-discord/${robloxId}`, {
+    headers: { Authorization: BLOXLINK_KEY }
   });
   if (r1.ok) {
     const j = await r1.json();
-    if (j?.primaryAccount?.discordId) return j.primaryAccount.discordId;
+    if (j?.primaryAccount?.discordId) return { discordId: j.primaryAccount.discordId, source: "guild" };
+    if (Array.isArray(j.discordIDs) && j.discordIDs.length) return { discordId: j.discordIDs[0], source: "guild" };
   }
 
-  // 2) fallback global kalau plan-mu support
+  // 2) Global fallback
   const r2 = await fetch(`https://api.blox.link/v4/public/roblox-to-discord/${robloxId}`, {
-    headers: { Authorization: process.env.BLOXLINK_KEY }
+    headers: { Authorization: BLOXLINK_KEY }
   });
-  if (!r2.ok) return null;
+  if (!r2.ok) return { discordId: null, source: "none" };
   const g = await r2.json();
-  return g?.primaryAccount?.discordId || null;
-};
+  if (g?.primaryAccount?.discordId) return { discordId: g.primaryAccount.discordId, source: "global" };
+  if (Array.isArray(g.discordIDs) && g.discordIDs.length) return { discordId: g.discordIDs[0], source: "global" };
+  return { discordId: null, source: "none" };
+}
 
 module.exports = async (req, res) => {
-  const url = new URL(req.url, "http://x");      // base dummy
+  const url = new URL(req.url, "http://x");
   const path = url.pathname.replace(/^\/api/, "") || "/";
 
-  // HTML status page (biar keliatan sukses)
+  // HTML status
   if (req.method==="GET" && (path==="/" || path==="/health") && url.searchParams.get("format")==="html") {
     return send(res,200,
 `<!doctype html><meta charset="utf-8"><title>Bridge OK</title>
@@ -108,16 +112,22 @@ module.exports = async (req, res) => {
   // GET /roles-by-roblox?robloxId=...
   if (req.method==="GET" && path==="/roles-by-roblox") {
     if (okSecret(req,res)!==true) return;
-    const robloxId = url.searchParams.get("robloxId");
-    if (!robloxId) return send(res,400,{error:"robloxId required"});
     if (!BLOXLINK_KEY || !GUILD_ID || !DISCORD_BOT_TOKEN)
       return send(res,500,{error:"misconfig: BLOXLINK_KEY/GUILD_ID/DISCORD_BOT_TOKEN"});
-    const discordId = await bloxlinkRobloxToDiscord(robloxId);
-    if (!discordId) return send(res,200,{verified:false,discordId:null,roles:[]});
-    const member = await getGuildMember(discordId);
-    if (!member) return send(res,200,{verified:true,discordId,roles:[]});
+
+    const robloxId = url.searchParams.get("robloxId");
+    if (!robloxId) return send(res,400,{error:"robloxId required"});
+
+    const map = await bloxlinkRobloxToDiscord(robloxId);
+    if (!map.discordId)
+      return send(res,200,{verified:false,discordId:null,roles:[],reason:`no_link_${map.source}`});
+
+    const member = await getGuildMember(map.discordId);
+    if (!member)
+      return send(res,200,{verified:true,discordId:map.discordId,roles:[],reason:"not_in_guild_or_no_permission",source:map.source});
+
     const roles = await resolveRoles(member.roles||[]);
-    return send(res,200,{verified:true,discordId,roles});
+    return send(res,200,{verified:true,discordId:map.discordId,roles,source:map.source});
   }
 
   return send(res,404,{error:"not found"});
