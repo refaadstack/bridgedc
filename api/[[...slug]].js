@@ -203,7 +203,7 @@ module.exports = async (req, res) => {
     const member = await getGuildMember(map.discordId);
     if (!member) {
       return send(res,200,{
-        verified: true,
+        verified: false,
         discordId: map.discordId,
         roles: [],
         reason: "not_in_guild_or_no_permission",
